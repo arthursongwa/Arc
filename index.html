@@ -535,7 +535,7 @@ canvas#chart { width: 100%; height: 190px; display: block; }
     <div class="profile">
       <div class="avatar" id="avatarInitial">A</div>
       <div class="username-block">
-        <span class="username" id="usernameLabel">arthursng</span>
+        <span class="username" id="usernameLabel">arthursongwa</span>
         <span class="subtitle" id="headerSubtitle">Bienvenue</span>
       </div>
     </div>
@@ -605,13 +605,28 @@ canvas#chart { width: 100%; height: 190px; display: block; }
       <div class="goal-percent" id="goalPercent">—</div>
     </div>
     <div class="goal-progress-track"><div class="goal-progress-fill" id="goalProgressFill" style="width:0%"></div></div>
+    <p class="sub" id="goalDetail" style="margin-top:8px;"></p>
+  </div>
+
+  <!-- Statistiques -->
+  <div class="widget-card" id="statsWidget" style="display:none;">
+    <div class="widget-top">
+      <div class="widget-info">
+        <h3>Statistiques</h3>
+        <p id="statsSubtitle">--</p>
+      </div>
+    </div>
+    <div class="stats-grid" id="statsGrid" style="margin-top:12px; padding-top:0; border-top:none;"></div>
   </div>
 
   <!-- Chart -->
   <div class="widget-card chart-card" id="chartCard" style="display:none;">
     <div class="chart-head">
       <span class="chart-title">Évolution</span>
-      <div class="range-btns" id="rangeBtns"></div>
+      <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <div class="range-btns" id="groupBtns"></div>
+        <div class="range-btns" id="rangeBtns"></div>
+      </div>
     </div>
     <canvas id="chart"></canvas>
   </div>
@@ -694,6 +709,9 @@ canvas#chart { width: 100%; height: 190px; display: block; }
       <label class="field-label">Taille (cm) — pour un IMC réel</label>
       <input type="number" id="heightInput" class="input-field" placeholder="Ex : 178" inputmode="decimal" />
 
+      <label class="field-label">Poids de départ</label>
+      <input type="number" id="startWeightInput" class="input-field" step="0.1" inputmode="decimal" placeholder="Auto (première pesée) si vide" />
+
       <label class="field-label">Poids objectif</label>
       <input type="number" id="goalInput" class="input-field" step="0.1" inputmode="decimal" placeholder="Ex : 75" />
 
@@ -726,17 +744,20 @@ canvas#chart { width: 100%; height: 190px; display: block; }
     goalKg: null,
     name: "arthursongwa",
     rangeDays: 90,
+    chartGroup: "day",
+    startWeightKg: null,
     lastBackupAt: null,
     lastBackupCount: 0,
   };
 
   var els = {};
   ["currentWeight","bmiStatus","deltaBadge","bestWeight","avg7","totalChangeLabel","trendIndicator","trendWidget",
-   "goalLabel","goalPercent","goalProgressFill","chartCard","rangeBtns","chart","sparkline",
+   "goalLabel","goalPercent","goalProgressFill","goalDetail","chartCard","rangeBtns","groupBtns","chart","sparkline",
+   "statsWidget","statsGrid","statsSubtitle",
    "addModal","historyModal","settingsModal","openAddModal","navAddBtn","closeAddModal","openHistoryBtn",
    "navSettingsBtn","openSettingsBtn","closeHistoryModal","weightRange","rangeValue","rangeMinLabel","rangeMaxLabel",
    "pickerUnit","dateInput","noteInput","confirmWeightBtn","historyList","historyCount","stepDown","stepUp",
-   "unitToggleBtn","unitKgBtn","unitLbBtn","nameInput","heightInput","goalInput","saveSettingsBtn","clearDataBtn",
+   "unitToggleBtn","unitKgBtn","unitLbBtn","nameInput","heightInput","startWeightInput","goalInput","saveSettingsBtn","clearDataBtn",
    "toast","usernameLabel","avatarInitial","installHint","installHintBtn","installHintText",
    "backupHint","backupHintBtn","backupHintText","backupStatusText","exportDataBtn","importDataBtn",
    "importFileInput","importDrop"
@@ -772,6 +793,8 @@ canvas#chart { width: 100%; height: 190px; display: block; }
       state.unit = s.unit || "kg";
       state.heightCm = typeof s.heightCm === "number" ? s.heightCm : null;
       state.goalKg = typeof s.goalKg === "number" ? s.goalKg : null;
+      state.startWeightKg = typeof s.startWeightKg === "number" ? s.startWeightKg : null;
+      state.chartGroup = s.chartGroup === "week" ? "week" : "day";
       state.name = s.name || "arthursongwa";
       state.lastBackupAt = s.lastBackupAt || null;
       state.lastBackupCount = typeof s.lastBackupCount === "number" ? s.lastBackupCount : 0;
@@ -784,7 +807,8 @@ canvas#chart { width: 100%; height: 190px; display: block; }
   function saveSettings(){
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-        unit: state.unit, heightCm: state.heightCm, goalKg: state.goalKg, name: state.name,
+        unit: state.unit, heightCm: state.heightCm, goalKg: state.goalKg, startWeightKg: state.startWeightKg,
+        chartGroup: state.chartGroup, name: state.name,
         lastBackupAt: state.lastBackupAt, lastBackupCount: state.lastBackupCount
       }));
     } catch(e){}
@@ -914,13 +938,24 @@ canvas#chart { width: 100%; height: 190px; display: block; }
   function mergeImportedEntries(imported){
     var byDate = {};
     state.entries.forEach(function(e){ byDate[e.date] = e; });
-    var added = 0, updated = 0;
+    var preExisting = {};
+    Object.keys(byDate).forEach(function(d){ preExisting[d] = true; });
+
+    var added = 0, updated = 0, duplicates = 0;
+    var seenInFile = {};
     imported.forEach(function(e){
-      if (byDate[e.date]) updated++; else added++;
-      byDate[e.date] = e;
+      if (seenInFile[e.date]) {
+        duplicates++;
+      } else if (preExisting[e.date]) {
+        updated++;
+      } else {
+        added++;
+      }
+      seenInFile[e.date] = true;
+      byDate[e.date] = e; // dernière valeur du fichier retenue pour une date donnée
     });
     state.entries = Object.keys(byDate).map(function(d){ return byDate[d]; });
-    return { added: added, updated: updated };
+    return { added: added, updated: updated, duplicates: duplicates };
   }
 
   function handleImportFile(file){
@@ -963,11 +998,103 @@ canvas#chart { width: 100%; height: 190px; display: block; }
       saveEntries();
       saveSettings();
       render();
-      var msg = result.added + " nouvelle" + (result.added>1?"s":"") + ", " + result.updated + " mise" + (result.updated>1?"s":"") + " à jour";
-      showToast(msg);
+      var parts = [];
+      if (result.added) parts.push(result.added + " nouvelle" + (result.added>1?"s":""));
+      if (result.updated) parts.push(result.updated + " mise" + (result.updated>1?"s":"") + " à jour");
+      if (result.duplicates) parts.push(result.duplicates + " doublon" + (result.duplicates>1?"s":"") + " ignoré" + (result.duplicates>1?"s":"") + " (même date dans le fichier)");
+      showToast(parts.length ? parts.join(", ") : "Import terminé");
     };
     reader.onerror = function(){ showToast("Impossible de lire le fichier"); };
     reader.readAsText(file);
+  }
+
+  // ---------- weekly grouping & stats ----------
+  function mondayOf(dateStr){
+    var d = new Date(dateStr+"T00:00:00");
+    var day = (d.getDay()+6)%7; // 0 = lundi
+    d.setDate(d.getDate()-day);
+    return d.toISOString().slice(0,10);
+  }
+
+  function groupByWeek(sorted){
+    var map = {}, order = [];
+    sorted.forEach(function(e){
+      var key = mondayOf(e.date);
+      if (!map[key]){ map[key] = []; order.push(key); }
+      map[key].push(e);
+    });
+    order.sort();
+    return order.map(function(key){
+      var items = map[key];
+      var vals = items.map(function(e){ return toDisplay(e.weightKg); });
+      var sum = vals.reduce(function(s,v){ return s+v; }, 0);
+      return { date: key, weight: round1(sum/vals.length), count: items.length };
+    });
+  }
+
+  function computeVariation(sorted, days){
+    if (sorted.length < 2) return null;
+    var cutoff = new Date(); cutoff.setDate(cutoff.getDate()-days);
+    var cutoffISO = cutoff.toISOString().slice(0,10);
+    var inRange = sorted.filter(function(e){ return e.date >= cutoffISO; });
+    if (!inRange.length) return null;
+    var first = inRange[0], last = sorted[sorted.length-1];
+    if (first.date === last.date) return null;
+    return round1(toDisplay(last.weightKg) - toDisplay(first.weightKg));
+  }
+
+  function computeRegularity(sorted, weeksCount){
+    var weeks = groupByWeek(sorted);
+    var cutoff = new Date(); cutoff.setDate(cutoff.getDate()-weeksCount*7);
+    return weeks.filter(function(w){ return new Date(w.date+"T00:00:00") >= cutoff; }).length;
+  }
+
+  function renderStats(sorted){
+    if (!els.statsWidget) return;
+    if (sorted.length < 2){ els.statsWidget.style.display = "none"; return; }
+    els.statsWidget.style.display = "block";
+
+    var v7 = computeVariation(sorted, 7);
+    var v30 = computeVariation(sorted, 30);
+    var v90 = computeVariation(sorted, 90);
+
+    var periodPts = sorted;
+    if (state.rangeDays !== "all"){
+      var cutoff = new Date(); cutoff.setDate(cutoff.getDate()-state.rangeDays);
+      var cutoffISO = cutoff.toISOString().slice(0,10);
+      var inRange = sorted.filter(function(e){ return e.date >= cutoffISO; });
+      periodPts = inRange.length ? inRange : sorted;
+    }
+    var periodVals = periodPts.map(function(e){ return toDisplay(e.weightKg); });
+    var avgP = round1(periodVals.reduce(function(s,v){ return s+v; }, 0)/periodVals.length);
+    var minP = round1(Math.min.apply(null, periodVals));
+    var maxP = round1(Math.max.apply(null, periodVals));
+
+    var weeksCount = 8;
+    var regularity = computeRegularity(sorted, weeksCount);
+
+    els.statsSubtitle.textContent = sorted.length + " pesée" + (sorted.length>1?"s":"") + " au total";
+
+    function fmtVar(v){ return v==null ? "—" : ((v>0?"+":"") + v.toFixed(1) + " " + state.unit); }
+    function varCls(v){ return v==null ? "" : (v>0?"up":(v<0?"down":"")); }
+
+    var boxes = [
+      { lbl:"7 jours", val: fmtVar(v7), cls: varCls(v7) },
+      { lbl:"30 jours", val: fmtVar(v30), cls: varCls(v30) },
+      { lbl:"90 jours", val: fmtVar(v90), cls: varCls(v90) },
+      { lbl:"Moyenne (période)", val: avgP.toFixed(1)+" "+state.unit, cls:"" },
+      { lbl:"Min / Max (période)", val: minP.toFixed(1)+" / "+maxP.toFixed(1), cls:"" },
+      { lbl:"Régularité", val: regularity + "/" + weeksCount + " sem.", cls:"" }
+    ];
+    els.statsGrid.innerHTML = "";
+    boxes.forEach(function(b){
+      var box = document.createElement("div");
+      box.className = "stat-box";
+      var lbl = document.createElement("div"); lbl.className = "stat-lbl"; lbl.textContent = b.lbl;
+      var val = document.createElement("div"); val.className = "stat-val" + (b.cls ? " "+b.cls : ""); val.textContent = b.val;
+      box.appendChild(lbl); box.appendChild(val);
+      els.statsGrid.appendChild(box);
+    });
   }
 
   // ---------- backup status / reminder ----------
@@ -1001,6 +1128,7 @@ canvas#chart { width: 100%; height: 190px; display: block; }
     renderReadout(sorted);
     renderTrend(sorted);
     renderGoal(sorted);
+    renderStats(sorted);
     renderChart(sorted);
     renderHistory(sorted);
     syncRangeInputBounds();
@@ -1093,6 +1221,7 @@ canvas#chart { width: 100%; height: 190px; display: block; }
       els.goalLabel.textContent = "Pas d'objectif défini · Réglages ⚙️";
       els.goalPercent.textContent = "—";
       els.goalProgressFill.style.width = "0%";
+      if (els.goalDetail) els.goalDetail.textContent = "";
       return;
     }
     var goalDisp = round1(toDisplay(state.goalKg));
@@ -1100,10 +1229,12 @@ canvas#chart { width: 100%; height: 190px; display: block; }
       els.goalLabel.textContent = "Objectif : " + goalDisp + " " + state.unit;
       els.goalPercent.textContent = "—";
       els.goalProgressFill.style.width = "0%";
+      if (els.goalDetail) els.goalDetail.textContent = "";
       return;
     }
-    var first = sorted[0], latest = sorted[sorted.length-1];
-    var startDisp = toDisplay(first.weightKg);
+    var latest = sorted[sorted.length-1];
+    var startKg = state.startWeightKg != null ? state.startWeightKg : sorted[0].weightKg;
+    var startDisp = round1(toDisplay(startKg));
     var latestDisp = toDisplay(latest.weightKg);
     var remaining = round1(latestDisp - goalDisp);
     var totalSpan = startDisp - goalDisp;
@@ -1115,15 +1246,53 @@ canvas#chart { width: 100%; height: 190px; display: block; }
       : (remaining > 0 ? Math.abs(remaining) + " " + state.unit + " à perdre" : Math.abs(remaining) + " " + state.unit + " sous l'objectif");
     els.goalPercent.textContent = Math.round(pct) + "%";
     els.goalProgressFill.style.width = pct + "%";
+
+    if (els.goalDetail){
+      var parts = ["Départ : " + startDisp.toFixed(1) + " " + state.unit];
+      var cutoff = new Date(); cutoff.setDate(cutoff.getDate()-28);
+      var cutoffISO = cutoff.toISOString().slice(0,10);
+      var recent = sorted.filter(function(e){ return e.date >= cutoffISO; });
+      if (recent.length >= 2){
+        var first = recent[0];
+        var days = (new Date(latest.date) - new Date(first.date)) / 86400000;
+        if (days > 0){
+          var kgPerWeek = round1(((toDisplay(latest.weightKg) - toDisplay(first.weightKg)) / days) * 7);
+          if (kgPerWeek !== 0){
+            parts.push("Rythme : " + (kgPerWeek>0?"+":"") + kgPerWeek + " " + state.unit + "/sem");
+            var headingRightWay = (remaining > 0 && kgPerWeek < 0) || (remaining < 0 && kgPerWeek > 0);
+            if (Math.abs(remaining) >= 0.1 && headingRightWay){
+              var weeksNeeded = Math.abs(remaining / kgPerWeek);
+              var eta = new Date(); eta.setDate(eta.getDate() + Math.round(weeksNeeded*7));
+              parts.push("Estimation : " + eta.toLocaleDateString(undefined, { day:"numeric", month:"short" }));
+            }
+          }
+        }
+      }
+      els.goalDetail.textContent = parts.join(" · ");
+    }
   }
 
   var RANGE_OPTIONS = [
     { label:"30J", value:30 }, { label:"90J", value:90 }, { label:"1AN", value:365 }, { label:"TOUT", value:"all" }
   ];
+  var GROUP_OPTIONS = [
+    { label:"Jour", value:"day" }, { label:"Semaine", value:"week" }
+  ];
 
   function renderChart(sorted){
     if (sorted.length < 2){ els.chartCard.style.display = "none"; return; }
     els.chartCard.style.display = "block";
+
+    if (els.groupBtns){
+      els.groupBtns.innerHTML = "";
+      GROUP_OPTIONS.forEach(function(opt){
+        var btn = document.createElement("button");
+        btn.className = "range-btn" + (state.chartGroup === opt.value ? " active" : "");
+        btn.textContent = opt.label;
+        btn.addEventListener("click", function(){ state.chartGroup = opt.value; saveSettings(); renderChart(sortedEntries()); });
+        els.groupBtns.appendChild(btn);
+      });
+    }
 
     els.rangeBtns.innerHTML = "";
     RANGE_OPTIONS.forEach(function(opt){
@@ -1134,10 +1303,16 @@ canvas#chart { width: 100%; height: 190px; display: block; }
       els.rangeBtns.appendChild(btn);
     });
 
-    var points = sorted.map(function(e){ return { date:e.date, weight: round1(toDisplay(e.weightKg)) }; });
-    var withAvg = points.map(function(p, i){
-      var start = Math.max(0, i-6);
-      var slice = points.slice(start, i+1);
+    var basePoints = state.chartGroup === "week"
+      ? groupByWeek(sorted)
+      : sorted.map(function(e){ return { date:e.date, weight: round1(toDisplay(e.weightKg)) }; });
+
+    if (basePoints.length < 2){ basePoints = sorted.map(function(e){ return { date:e.date, weight: round1(toDisplay(e.weightKg)) }; }); }
+
+    var windowSize = state.chartGroup === "week" ? 4 : 7;
+    var withAvg = basePoints.map(function(p, i, arr){
+      var start = Math.max(0, i-(windowSize-1));
+      var slice = arr.slice(start, i+1);
       var sum = slice.reduce(function(s,x){ return s+x.weight; }, 0);
       return Object.assign({}, p, { avg: round1(sum/slice.length) });
     });
@@ -1339,6 +1514,9 @@ canvas#chart { width: 100%; height: 190px; display: block; }
   function openSettings(){
     els.nameInput.value = state.name;
     els.heightInput.value = state.heightCm != null ? state.heightCm : "";
+    var sorted = sortedEntries();
+    var autoStart = state.startWeightKg != null ? state.startWeightKg : (sorted.length ? sorted[0].weightKg : null);
+    els.startWeightInput.value = autoStart != null ? round1(toDisplay(autoStart)) : "";
     els.goalInput.value = state.goalKg != null ? round1(toDisplay(state.goalKg)) : "";
     els.unitKgBtn.classList.toggle("active", state.unit === "kg");
     els.unitLbBtn.classList.toggle("active", state.unit === "lb");
@@ -1396,6 +1574,8 @@ canvas#chart { width: 100%; height: 190px; display: block; }
     state.name = els.nameInput.value.trim() || "Toi";
     var h = parseFloat(els.heightInput.value);
     state.heightCm = (!isNaN(h) && h > 0) ? h : null;
+    var sw = parseFloat(els.startWeightInput.value);
+    state.startWeightKg = (!isNaN(sw) && sw > 0) ? toKg(sw) : null;
     var g = parseFloat(els.goalInput.value);
     state.goalKg = (!isNaN(g) && g > 0) ? toKg(g) : null;
     saveSettings();
