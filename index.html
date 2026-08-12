@@ -463,6 +463,25 @@ canvas#chart { width: 100%; height: 190px; display: block; }
   cursor: pointer;
   white-space: nowrap;
 }
+.install-hint.warning { background: rgba(245,166,35,0.14); border-color: var(--warning); color: var(--warning); }
+.install-hint.warning button { background: var(--warning); color: #1a1305; }
+
+/* ---------- Backup / import ---------- */
+.backup-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 2px 0 12px;
+}
+.import-drop {
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+.import-drop.drag { border-color: var(--accent); color: var(--accent-light); background: var(--accent-dim); }
 
 /* ---------- Bottom nav ---------- */
 .bottom-nav {
@@ -526,6 +545,11 @@ canvas#chart { width: 100%; height: 190px; display: block; }
   <div class="install-hint" id="installHint">
     <span id="installHintText">Installe l'app sur ton écran d'accueil</span>
     <button id="installHintBtn">Installer</button>
+  </div>
+
+  <div class="install-hint warning" id="backupHint">
+    <span id="backupHintText">Pense à sauvegarder tes données</span>
+    <button id="backupHintBtn">Sauvegarder</button>
   </div>
 
   <!-- Main readout -->
@@ -674,6 +698,14 @@ canvas#chart { width: 100%; height: 190px; display: block; }
       <input type="number" id="goalInput" class="input-field" step="0.1" inputmode="decimal" placeholder="Ex : 75" />
 
       <button class="btn-primary" id="saveSettingsBtn">Enregistrer</button>
+
+      <label class="field-label" style="margin-top:20px;">Sauvegarde & Import</label>
+      <div class="backup-status" id="backupStatusText">Aucune sauvegarde effectuée</div>
+      <button class="btn-primary" id="exportDataBtn" style="margin-top:0;">⬇️ Exporter (fichier de sauvegarde)</button>
+      <button class="btn-secondary" id="importDataBtn">⬆️ Importer des données (JSON ou CSV)</button>
+      <div class="import-drop" id="importDrop">Ou dépose ici un fichier .json / .csv</div>
+      <input type="file" id="importFileInput" accept=".json,application/json,.csv,text/csv,text/plain" style="display:none" />
+
       <button class="danger-link" id="clearDataBtn">Effacer toutes les données</button>
     </div>
   </div>
@@ -694,6 +726,8 @@ canvas#chart { width: 100%; height: 190px; display: block; }
     goalKg: null,
     name: "arthursongwa",
     rangeDays: 90,
+    lastBackupAt: null,
+    lastBackupCount: 0,
   };
 
   var els = {};
@@ -703,7 +737,9 @@ canvas#chart { width: 100%; height: 190px; display: block; }
    "navSettingsBtn","openSettingsBtn","closeHistoryModal","weightRange","rangeValue","rangeMinLabel","rangeMaxLabel",
    "pickerUnit","dateInput","noteInput","confirmWeightBtn","historyList","historyCount","stepDown","stepUp",
    "unitToggleBtn","unitKgBtn","unitLbBtn","nameInput","heightInput","goalInput","saveSettingsBtn","clearDataBtn",
-   "toast","usernameLabel","avatarInitial","installHint","installHintBtn","installHintText"
+   "toast","usernameLabel","avatarInitial","installHint","installHintBtn","installHintText",
+   "backupHint","backupHintBtn","backupHintText","backupStatusText","exportDataBtn","importDataBtn",
+   "importFileInput","importDrop"
   ].forEach(function(id){ els[id] = document.getElementById(id); });
 
   function kgToLb(kg){ return kg*2.2046226218; }
@@ -737,6 +773,8 @@ canvas#chart { width: 100%; height: 190px; display: block; }
       state.heightCm = typeof s.heightCm === "number" ? s.heightCm : null;
       state.goalKg = typeof s.goalKg === "number" ? s.goalKg : null;
       state.name = s.name || "arthursongwa";
+      state.lastBackupAt = s.lastBackupAt || null;
+      state.lastBackupCount = typeof s.lastBackupCount === "number" ? s.lastBackupCount : 0;
     } catch(e){}
   }
   function saveEntries(){
@@ -746,7 +784,8 @@ canvas#chart { width: 100%; height: 190px; display: block; }
   function saveSettings(){
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-        unit: state.unit, heightCm: state.heightCm, goalKg: state.goalKg, name: state.name
+        unit: state.unit, heightCm: state.heightCm, goalKg: state.goalKg, name: state.name,
+        lastBackupAt: state.lastBackupAt, lastBackupCount: state.lastBackupCount
       }));
     } catch(e){}
   }
@@ -760,6 +799,195 @@ canvas#chart { width: 100%; height: 190px; display: block; }
 
   function sortedEntries(){
     return state.entries.slice().sort(function(a,b){ return a.date.localeCompare(b.date); });
+  }
+
+  // ---------- backup: export ----------
+  function exportData(){
+    var payload = {
+      app: "weightlog",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      settings: { unit: state.unit, heightCm: state.heightCm, goalKg: state.goalKg, name: state.name },
+      entries: state.entries
+    };
+    try {
+      var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "poids-sauvegarde-" + todayISO() + ".json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 1500);
+      state.lastBackupAt = new Date().toISOString();
+      state.lastBackupCount = state.entries.length;
+      saveSettings();
+      updateBackupStatus();
+      showToast("Sauvegarde téléchargée");
+    } catch(e){
+      showToast("Échec de l'export");
+    }
+  }
+
+  // ---------- backup: date/number parsing helpers ----------
+  function normalizeDateStr(raw){
+    if (raw == null) return null;
+    raw = String(raw).trim();
+    if (!raw) return null;
+    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0,10);
+    var dmY = raw.match(/^(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{4})$/);
+    if (dmY){
+      var dd = ("0"+dmY[1]).slice(-2), mm = ("0"+dmY[2]).slice(-2);
+      return dmY[3] + "-" + mm + "-" + dd;
+    }
+    var d = new Date(raw);
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0,10);
+    return null;
+  }
+
+  function parseNumLoose(raw){
+    if (typeof raw === "number") return raw;
+    if (raw == null) return NaN;
+    var s = String(raw).trim().replace(",", ".").replace(/[^\d.\-]/g, "");
+    return parseFloat(s);
+  }
+
+  // ---------- backup: import (JSON) ----------
+  function normalizeImportedEntries(arr){
+    var out = [];
+    arr.forEach(function(item, i){
+      if (!item || typeof item !== "object") return;
+      var date = normalizeDateStr(item.date || item.Date || item.jour || item.day);
+      if (!date) return;
+      var wKg = null;
+      if (typeof item.weightKg === "number") {
+        wKg = item.weightKg;
+      } else {
+        var isLb = item.unit === "lb" || item.unit === "lbs";
+        var raw = item.weight != null ? item.weight : (item.poids != null ? item.poids : (item.kg != null ? item.kg : item.lb));
+        var num = parseNumLoose(raw);
+        if (!isNaN(num)) wKg = (isLb || (item.lb != null && item.kg == null && item.weightKg == null)) ? lbToKg(num) : num;
+      }
+      if (wKg == null || isNaN(wKg) || wKg <= 0) return;
+      out.push({ id: date + "-imp-" + Date.now() + "-" + i, date: date, weightKg: wKg, note: item.note || "" });
+    });
+    return out;
+  }
+
+  // ---------- backup: import (CSV) ----------
+  function parseCsvEntries(text){
+    var lines = text.split(/\r\n|\n|\r/).map(function(l){ return l.trim(); }).filter(function(l){ return l.length; });
+    if (!lines.length) return [];
+    var delim = lines[0].indexOf(";") !== -1 ? ";" : (lines[0].indexOf("\t") !== -1 ? "\t" : ",");
+    var rows = lines.map(function(l){ return l.split(delim).map(function(c){ return c.trim().replace(/^"|"$/g, ""); }); });
+
+    var header = rows[0].map(function(c){ return c.toLowerCase(); });
+    var looksLikeHeader = header.some(function(c){ return /date|jour|day|poids|weight|kg|lb|masse/.test(c); });
+
+    var dateIdx = -1, weightIdx = -1, noteIdx = -1, unitIsLb = false;
+    if (looksLikeHeader){
+      header.forEach(function(c, i){
+        if (dateIdx === -1 && /date|jour|day/.test(c)) dateIdx = i;
+        if (weightIdx === -1 && /poids|weight|kg|lb|masse/.test(c)){ weightIdx = i; if (/lb/.test(c)) unitIsLb = true; }
+        if (noteIdx === -1 && /note|comment|remarque/.test(c)) noteIdx = i;
+      });
+      rows = rows.slice(1);
+    } else {
+      dateIdx = 0; weightIdx = 1; noteIdx = rows[0].length > 2 ? 2 : -1;
+    }
+    if (dateIdx === -1 || weightIdx === -1) return [];
+
+    var out = [];
+    rows.forEach(function(cols, i){
+      if (cols[dateIdx] == null || cols[weightIdx] == null) return;
+      var date = normalizeDateStr(cols[dateIdx]);
+      if (!date) return;
+      var num = parseNumLoose(cols[weightIdx]);
+      if (isNaN(num) || num <= 0) return;
+      var wKg = unitIsLb ? lbToKg(num) : num;
+      out.push({ id: date + "-imp-" + Date.now() + "-" + i, date: date, weightKg: wKg, note: noteIdx !== -1 ? (cols[noteIdx]||"") : "" });
+    });
+    return out;
+  }
+
+  function mergeImportedEntries(imported){
+    var byDate = {};
+    state.entries.forEach(function(e){ byDate[e.date] = e; });
+    var added = 0, updated = 0;
+    imported.forEach(function(e){
+      if (byDate[e.date]) updated++; else added++;
+      byDate[e.date] = e;
+    });
+    state.entries = Object.keys(byDate).map(function(d){ return byDate[d]; });
+    return { added: added, updated: updated };
+  }
+
+  function handleImportFile(file){
+    var reader = new FileReader();
+    reader.onload = function(){
+      var text = String(reader.result || "");
+      var trimmed = text.trim();
+      var parsedEntries = null;
+      var importedSettings = null;
+
+      if (trimmed.charAt(0) === "{" || trimmed.charAt(0) === "["){
+        try {
+          var data = JSON.parse(trimmed);
+          if (Array.isArray(data)){
+            parsedEntries = normalizeImportedEntries(data);
+          } else if (data && typeof data === "object"){
+            if (Array.isArray(data.entries)) parsedEntries = normalizeImportedEntries(data.entries);
+            if (data.settings && typeof data.settings === "object") importedSettings = data.settings;
+          }
+        } catch(e){ parsedEntries = null; }
+      }
+
+      if (!parsedEntries || !parsedEntries.length){
+        parsedEntries = parseCsvEntries(text);
+      }
+
+      if (!parsedEntries || !parsedEntries.length){
+        showToast("Aucune pesée reconnue dans ce fichier");
+        return;
+      }
+
+      var result = mergeImportedEntries(parsedEntries);
+
+      if (importedSettings){
+        if (typeof importedSettings.heightCm === "number") state.heightCm = importedSettings.heightCm;
+        if (typeof importedSettings.goalKg === "number" && state.goalKg == null) state.goalKg = importedSettings.goalKg;
+        if (importedSettings.name && state.name === "arthursongwa") state.name = importedSettings.name;
+      }
+
+      saveEntries();
+      saveSettings();
+      render();
+      var msg = result.added + " nouvelle" + (result.added>1?"s":"") + ", " + result.updated + " mise" + (result.updated>1?"s":"") + " à jour";
+      showToast(msg);
+    };
+    reader.onerror = function(){ showToast("Impossible de lire le fichier"); };
+    reader.readAsText(file);
+  }
+
+  // ---------- backup status / reminder ----------
+  function updateBackupStatus(){
+    if (els.backupStatusText){
+      els.backupStatusText.textContent = state.lastBackupAt
+        ? "Dernière sauvegarde : " + fmtDateFull(state.lastBackupAt.slice(0,10)) + " · " + state.lastBackupCount + " pesées"
+        : "Aucune sauvegarde effectuée — exporte pour ne rien perdre";
+    }
+    checkBackupReminder();
+  }
+  function checkBackupReminder(){
+    if (!els.backupHint) return;
+    var since = state.entries.length - (state.lastBackupCount || 0);
+    if (state.entries.length >= 3 && since >= 5){
+      els.backupHintText.textContent = since + " nouvelle" + (since>1?"s":"") + " pesée" + (since>1?"s":"") + " depuis ta dernière sauvegarde";
+      els.backupHint.classList.add("show");
+    } else {
+      els.backupHint.classList.remove("show");
+    }
   }
 
   // ---------- render ----------
@@ -776,6 +1004,7 @@ canvas#chart { width: 100%; height: 190px; display: block; }
     renderChart(sorted);
     renderHistory(sorted);
     syncRangeInputBounds();
+    updateBackupStatus();
   }
 
   function computeBmi(weightKg){
@@ -1113,6 +1342,7 @@ canvas#chart { width: 100%; height: 190px; display: block; }
     els.goalInput.value = state.goalKg != null ? round1(toDisplay(state.goalKg)) : "";
     els.unitKgBtn.classList.toggle("active", state.unit === "kg");
     els.unitLbBtn.classList.toggle("active", state.unit === "lb");
+    updateBackupStatus();
     openModal(els.settingsModal);
   }
   els.openSettingsBtn.addEventListener("click", openSettings);
@@ -1181,6 +1411,28 @@ canvas#chart { width: 100%; height: 190px; display: block; }
     render();
     showToast("Données effacées");
   });
+
+  // ---------- backup: wiring ----------
+  els.exportDataBtn.addEventListener("click", exportData);
+  els.backupHintBtn.addEventListener("click", exportData);
+  els.importDataBtn.addEventListener("click", function(){ els.importFileInput.click(); });
+  els.importFileInput.addEventListener("change", function(e){
+    var file = e.target.files && e.target.files[0];
+    if (file) handleImportFile(file);
+    e.target.value = "";
+  });
+  if (els.importDrop){
+    ["dragover","dragenter"].forEach(function(ev){
+      els.importDrop.addEventListener(ev, function(e){ e.preventDefault(); els.importDrop.classList.add("drag"); });
+    });
+    ["dragleave","dragend","drop"].forEach(function(ev){
+      els.importDrop.addEventListener(ev, function(e){ e.preventDefault(); els.importDrop.classList.remove("drag"); });
+    });
+    els.importDrop.addEventListener("drop", function(e){
+      var file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) handleImportFile(file);
+    });
+  }
 
   window.addEventListener("resize", function(){ render(); });
 
